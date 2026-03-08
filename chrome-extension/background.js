@@ -84,8 +84,14 @@ async function analyzeQuestion(payload) {
   const timeoutMs = getConfigValue("REQUEST_TIMEOUT_MS", 20000);
   const maxRetries = getConfigValue("MAX_RETRIES", 1);
   const stored = await chrome.storage.local.get(["backendUrlOverride"]);
-  const backendUrl =
-    stored.backendUrlOverride || getConfigValue("BACKEND_URL", "http://localhost:10000");
+  const configBackendUrl = getConfigValue("BACKEND_URL", "http://localhost:10000");
+  const urlCandidates = [];
+  if (stored.backendUrlOverride) {
+    urlCandidates.push(stored.backendUrlOverride);
+  }
+  if (!urlCandidates.includes(configBackendUrl)) {
+    urlCandidates.push(configBackendUrl);
+  }
 
   const requestBody = {
     questionText: payload.questionText,
@@ -96,49 +102,56 @@ async function analyzeQuestion(payload) {
     }
   };
 
-  let lastError;
+  const attemptErrors = [];
 
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    try {
-      const response = await withTimeout(
-        fetch(`${backendUrl}/analyze-question`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody)
-        }),
-        timeoutMs,
-        "Backend request timed out."
-      );
+  for (const backendUrl of urlCandidates) {
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        const response = await withTimeout(
+          fetch(`${backendUrl}/analyze-question`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+          }),
+          timeoutMs,
+          "Backend request timed out."
+        );
 
-      if (!response.ok) {
-        let message = `Backend returned ${response.status}`;
-        try {
-          const data = await response.json();
-          if (data?.error) {
-            message = data.error;
+        if (!response.ok) {
+          let message = `Backend returned ${response.status}`;
+          try {
+            const data = await response.json();
+            if (data?.error) {
+              message = data.error;
+            }
+          } catch {
+            // Ignore non-JSON responses.
           }
-        } catch {
-          // Ignore non-JSON responses.
+          throw new Error(message);
         }
-        throw new Error(message);
-      }
 
-      const result = await response.json();
-      result.confidence = clampConfidence(result.confidence);
-      return result;
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        const result = await response.json();
+        result.confidence = clampConfidence(result.confidence);
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        }
       }
+    }
+
+    const baseMessage = lastError?.message || "unknown backend error";
+    if (/Failed to fetch/i.test(baseMessage)) {
+      const healthError = await probeBackendHealth(backendUrl);
+      attemptErrors.push(`${backendUrl} -> ${healthError}`);
+    } else {
+      attemptErrors.push(`${backendUrl} -> ${baseMessage}`);
     }
   }
 
-  if (/Failed to fetch/i.test(lastError?.message || "")) {
-    const healthError = await probeBackendHealth(backendUrl);
-    throw new Error(healthError);
-  }
-  throw new Error(lastError?.message || "Failed to reach backend.");
+  throw new Error(`All backend URLs failed: ${attemptErrors.join(" | ")}`);
 }
 
 async function probeBackendHealth(backendUrl) {

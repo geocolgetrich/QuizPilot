@@ -116,6 +116,11 @@ app.use((error, _req, res, _next) => {
     return;
   }
 
+  if (/Gemini API error|Gemini request timed out|Gemini network error|Gemini response was not valid JSON|Gemini returned an empty response/i.test(message)) {
+    res.status(502).json({ error: message });
+    return;
+  }
+
   console.error("[server-error]", error);
   res.status(500).json({ error: "Internal server error." });
 });

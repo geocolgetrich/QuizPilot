@@ -106,7 +106,7 @@ Options:
 ${formattedOptions}`;
 }
 
-async function callGemini({ questionText, options, context, apiKey, model }) {
+async function callGeminiWithModel({ questionText, options, context, apiKey, model }) {
   const endpoint = `${GEMINI_ENDPOINT}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const prompt = buildPrompt({ questionText, options, context });
   const controller = new AbortController();
@@ -160,6 +160,34 @@ async function callGemini({ questionText, options, context, apiKey, model }) {
   }
 
   return normalizeModelOutput(parsed, options);
+}
+
+async function callGemini({ questionText, options, context, apiKey, model }) {
+  const candidateModels = [model, "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    .map((item) => sanitizeText(item))
+    .filter(Boolean)
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+
+  let lastError;
+  for (const candidateModel of candidateModels) {
+    try {
+      return await callGeminiWithModel({
+        questionText,
+        options,
+        context,
+        apiKey,
+        model: candidateModel
+      });
+    } catch (error) {
+      lastError = error;
+      // Retry with next model only when model is not found/unsupported.
+      if (!/Gemini API error \((404|400)\)/i.test(error.message || "")) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("Gemini call failed.");
 }
 
 module.exports = { callGemini };
