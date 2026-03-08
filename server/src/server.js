@@ -15,8 +15,7 @@ const port = Number(process.env.PORT || 10000);
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 60);
-const allowAllChromeExtensions =
-  String(process.env.ALLOW_ALL_CHROME_EXTENSION_ORIGINS || "true").toLowerCase() === "true";
+const corsStrictMode = String(process.env.CORS_STRICT_MODE || "false").toLowerCase() === "true";
 
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -38,31 +37,32 @@ app.use(
 app.use(express.json({ limit: "32kb" }));
 app.use(morgan("combined"));
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
 
-      if (allowAllChromeExtensions && /^chrome-extension:\/\//i.test(origin)) {
-        callback(null, true);
-        return;
-      }
+    if (!corsStrictMode) {
+      callback(null, true);
+      return;
+    }
 
-      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
 
-      callback(new Error("CORS blocked for this origin."));
-    },
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-    maxAge: 600
-  })
-);
+    callback(new Error("CORS blocked for this origin in strict mode."));
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+  maxAge: 600
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(
   rateLimit({
@@ -82,6 +82,8 @@ app.get("/health", (_req, res) => {
     service: "quizpilot-server",
     configured: Boolean(geminiApiKey),
     model: geminiModel,
+    corsStrictMode,
+    allowedOrigins,
     timestamp: new Date().toISOString()
   });
 });
@@ -120,6 +122,6 @@ app.use((error, _req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`[startup] QuizPilot backend running on port ${port}`);
-  console.log(`[startup] Allow all Chrome extension origins: ${allowAllChromeExtensions}`);
+  console.log(`[startup] CORS strict mode: ${corsStrictMode}`);
   console.log(`[startup] Allowed origins: ${allowedOrigins.join(", ") || "(any - set ALLOWED_ORIGINS)"}`);
 });

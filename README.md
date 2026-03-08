@@ -19,13 +19,14 @@ Important scope boundary:
   - `src/validation.js`: request sanitization/validation helpers.
 
 Data flow:
-1. User clicks **Scan Current Question** in popup.
+1. User clicks **Scan All Questions** in popup.
 2. Popup asks background service worker to scan the active tab.
-3. Background asks content script to extract question/options currently visible in DOM.
-4. Background sends structured data to backend `POST /analyze-question`.
-5. Backend calls Gemini with strict JSON instructions.
-6. Parsed response is returned to extension.
-7. Extension can highlight best option and show explanation/confidence in popup.
+3. Background asks content script to extract all visible question/option blocks from the DOM.
+4. User selects one detected question from the popup dropdown and clicks **Get AI Answer**.
+5. Background sends selected question data to backend `POST /analyze-question`.
+6. Backend calls Gemini with strict JSON instructions and resilient parsing.
+7. Parsed response is returned to extension.
+8. Extension shows answer/explanation in popup and can display a suggestion panel beside the selected question.
 
 ## Folder Structure
 
@@ -69,7 +70,9 @@ cp .env.example .env
 
 4. Edit `.env`:
 - `GEMINI_API_KEY=...`
-- `ALLOWED_ORIGINS=chrome-extension://<your_extension_id>` (after loading extension once)
+- Optional strict mode:
+  - `CORS_STRICT_MODE=true`
+  - `ALLOWED_ORIGINS=chrome-extension://<your_extension_id>` (after loading extension once)
 
 5. Start server:
 
@@ -97,7 +100,8 @@ curl http://localhost:10000/health
 4. In Render service settings, add environment variables:
 - `GEMINI_API_KEY` = your real Gemini API key
 - `GEMINI_MODEL` = `gemini-2.0-flash` (or another compatible model)
-- `ALLOWED_ORIGINS` = `chrome-extension://<your_extension_id>`
+- `CORS_STRICT_MODE` = `false` (recommended while stabilizing integration)
+- `ALLOWED_ORIGINS` = `chrome-extension://<your_extension_id>` (required only when strict mode is true)
 - `RATE_LIMIT_MAX` = `60` (or preferred limit)
 
 5. Deploy. Note your Render URL (for example `https://quizpilot-api.onrender.com`).
@@ -165,7 +169,7 @@ Response body:
 - Try rescanning after expanding collapsed sections.
 
 2. `No analyzed question yet`
-- Click **Scan Current Question** first, then **Highlight** or **Explain**.
+- Click **Scan All Questions**, select one question, then click **Get AI Answer**.
 
 3. `Backend request timed out`
 - Confirm server is running and reachable.
@@ -176,7 +180,8 @@ Response body:
 - Set `GEMINI_API_KEY` in `server/.env` (local) or Render environment settings.
 
 5. CORS errors
-- Ensure `ALLOWED_ORIGINS` includes exact extension origin:
+- Keep `CORS_STRICT_MODE=false` while testing.
+- If strict mode is enabled, ensure `ALLOWED_ORIGINS` includes exact extension origin:
   - `chrome-extension://<extension_id>`
 
 6. Gemini JSON parsing errors

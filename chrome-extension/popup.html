@@ -14,9 +14,17 @@
     </header>
 
     <section class="actions">
-      <button id="scanBtn" class="btn btn-primary">Scan Current Question</button>
-      <button id="highlightBtn" class="btn">Show Answer Beside Question</button>
+      <button id="scanBtn" class="btn btn-primary">Scan All Questions</button>
+      <button id="highlightBtn" class="btn">Get AI Answer</button>
       <button id="explainBtn" class="btn">Explain Answer</button>
+    </section>
+
+    <section class="status-card">
+      <p><strong>Detected questions:</strong> <span id="questionCount">0</span></p>
+      <label for="questionSelect"><strong>Select question</strong></label>
+      <select id="questionSelect" class="btn" disabled>
+        <option value="">Scan questions first</option>
+      </select>
     </section>
 
     <label class="toggle-row" for="autoHighlightToggle">

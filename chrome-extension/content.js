@@ -1,10 +1,7 @@
 const OVERLAY_ID = "qp-floating-overlay";
-const HIGHLIGHT_CLASS = "qp-suggested-answer";
-const BADGE_CLASS = "qp-suggested-badge";
 const PANEL_ID = "qp-question-suggestion-panel";
 
-let lastScan = null;
-let highlightedNodes = [];
+let lastScans = [];
 let suggestionPanelNode = null;
 let injectedStyleTag = null;
 
@@ -15,24 +12,6 @@ function ensureStyles() {
 
   injectedStyleTag = document.createElement("style");
   injectedStyleTag.textContent = `
-    .${HIGHLIGHT_CLASS} {
-      background: #e8fbe8 !important;
-      outline: 3px solid #22c55e !important;
-      border-radius: 8px !important;
-      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15) !important;
-      transition: background 140ms ease, outline 140ms ease;
-    }
-    .${BADGE_CLASS} {
-      display: inline-block;
-      margin-left: 8px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 600;
-      background: #166534;
-      color: #ffffff;
-      vertical-align: middle;
-    }
     #${OVERLAY_ID} {
       position: fixed;
       right: 16px;
@@ -94,11 +73,7 @@ function isVisible(element) {
 
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-
-  const verticallyVisible = rect.bottom > 0 && rect.top < viewportHeight;
-  const horizontallyVisible = rect.right > 0 && rect.left < viewportWidth;
-
-  return verticallyVisible && horizontallyVisible;
+  return rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth;
 }
 
 function normalizeWhitespace(input) {
@@ -113,14 +88,12 @@ function getTextFromElement(element) {
   if (!element) {
     return "";
   }
-
   return normalizeWhitespace(element.innerText || element.textContent || "");
 }
 
 function uniqueByText(optionEntries) {
   const seen = new Set();
   const result = [];
-
   for (const entry of optionEntries) {
     const key = entry.text.toLowerCase();
     if (!key || seen.has(key)) {
@@ -129,7 +102,6 @@ function uniqueByText(optionEntries) {
     seen.add(key);
     result.push(entry);
   }
-
   return result;
 }
 
@@ -146,7 +118,7 @@ function getVisibleContainers() {
     }
 
     const optionsCount = element.querySelectorAll(
-      "input[type='radio'], input[type='checkbox'], [role='radio'], [role='option'], label, li, button"
+      "input[type='radio'], input[type='checkbox'], [role='radio'], [role='option'], label, li, button, .option, .answer, .choice"
     ).length;
     return optionsCount >= 2;
   });
@@ -154,7 +126,6 @@ function getVisibleContainers() {
 
 function scoreContainer(container) {
   let score = 0;
-
   const text = getTextFromElement(container);
   if (text.includes("?")) {
     score += 3;
@@ -180,23 +151,7 @@ function scoreContainer(container) {
   return score;
 }
 
-function pickBestContainer() {
-  const containers = getVisibleContainers();
-  let best = null;
-  let bestScore = -Infinity;
-
-  for (const container of containers) {
-    const score = scoreContainer(container);
-    if (score > bestScore) {
-      bestScore = score;
-      best = container;
-    }
-  }
-
-  return best;
-}
-
-function extractQuestionText(container) {
+function getQuestionNode(container) {
   const preferredSelectors = [
     "h1",
     "h2",
@@ -215,16 +170,23 @@ function extractQuestionText(container) {
       if (!isVisible(node)) {
         continue;
       }
-
       const text = getTextFromElement(node);
       if (text.length < 12 || text.length > 500) {
         continue;
       }
-
       if (text.includes("?") || /choose|select|which|what|true|false/i.test(text)) {
-        return text;
+        return node;
       }
     }
+  }
+
+  return null;
+}
+
+function extractQuestionText(container) {
+  const questionNode = getQuestionNode(container);
+  if (questionNode) {
+    return getTextFromElement(questionNode);
   }
 
   const fallback = getTextFromElement(container)
@@ -283,11 +245,7 @@ function extractOptions(container, questionText) {
       }
 
       const text = cleanOptionText(getTextFromElement(candidate));
-      if (text.length < 1 || text.length > 240) {
-        continue;
-      }
-
-      if (text === questionText || text.length < 2) {
+      if (text.length < 1 || text.length > 240 || text === questionText || text.length < 2) {
         continue;
       }
 
@@ -302,31 +260,18 @@ function extractOptions(container, questionText) {
     }
   }
 
-  // Fallback for quiz UIs that render options as plain div blocks with no
-  // input/label semantics.
   if (rawOptions.length < 2) {
     const blockCandidates = Array.from(container.querySelectorAll("div, button, li, p"));
     for (const candidate of blockCandidates) {
-      if (!isVisible(candidate)) {
-        continue;
-      }
-
-      // Skip high-level containers that have many nested elements.
-      if (candidate.children.length > 4) {
+      if (!isVisible(candidate) || candidate.children.length > 4) {
         continue;
       }
 
       const text = cleanOptionText(getTextFromElement(candidate));
-      if (!text || text === questionText) {
+      if (!text || text === questionText || text.length < 1 || text.length > 120) {
         continue;
       }
 
-      // Keep short, option-like blocks and ignore long paragraph content.
-      if (text.length < 1 || text.length > 120) {
-        continue;
-      }
-
-      // Avoid parent blocks whose text is just aggregation of child options.
       const childOptionLike = Array.from(candidate.children).filter((child) => {
         const childText = cleanOptionText(getTextFromElement(child));
         return childText.length >= 1 && childText.length <= 120;
@@ -340,13 +285,7 @@ function extractOptions(container, questionText) {
   }
 
   const uniqueOptions = uniqueByText(rawOptions).filter((entry) => entry.text !== questionText);
-
-  // Prefer option counts that look like normal MCQ blocks.
-  if (uniqueOptions.length > 10) {
-    return uniqueOptions.slice(0, 10);
-  }
-
-  return uniqueOptions;
+  return uniqueOptions.slice(0, 10);
 }
 
 function showOverlay(message, type = "info") {
@@ -376,18 +315,6 @@ function showOverlay(message, type = "info") {
   }, 2200);
 }
 
-function clearHighlighting() {
-  for (const entry of highlightedNodes) {
-    if (entry.optionElement?.classList) {
-      entry.optionElement.classList.remove(HIGHLIGHT_CLASS);
-    }
-    if (entry.badgeNode?.isConnected) {
-      entry.badgeNode.remove();
-    }
-  }
-  highlightedNodes = [];
-}
-
 function clearSuggestionPanel() {
   if (suggestionPanelNode && suggestionPanelNode.isConnected) {
     suggestionPanelNode.remove();
@@ -395,17 +322,86 @@ function clearSuggestionPanel() {
   suggestionPanelNode = null;
 }
 
-function applyHighlight(analysis) {
-  clearHighlighting();
+function parseContainerToQuestion(container, id) {
+  const questionText = extractQuestionText(container);
+  const options = extractOptions(container, questionText);
+
+  if (!questionText || questionText.length < 8 || options.length < 2) {
+    return null;
+  }
+
+  return {
+    id,
+    questionText,
+    options: options.map((entry) => entry.text),
+    pageTitle: normalizeWhitespace(document.title || ""),
+    hostname: window.location.hostname,
+    refs: {
+      containerNode: container,
+      questionNode: getQuestionNode(container)
+    }
+  };
+}
+
+function scanAllQuestions() {
+  showOverlay("Scanning all visible questions...");
   clearSuggestionPanel();
 
-  if (!lastScan?.containerNode || !lastScan.containerNode.isConnected) {
-    throw new Error("Question block is no longer visible. Please re-scan.");
+  const rankedContainers = getVisibleContainers()
+    .map((container) => ({ container, score: scoreContainer(container) }))
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.container);
+
+  const dedupe = new Set();
+  const results = [];
+
+  for (const container of rankedContainers) {
+    const parsed = parseContainerToQuestion(container, results.length);
+    if (!parsed) {
+      continue;
+    }
+
+    const key = parsed.questionText.toLowerCase();
+    if (dedupe.has(key)) {
+      continue;
+    }
+
+    dedupe.add(key);
+    results.push(parsed);
+    if (results.length >= 20) {
+      break;
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error("Could not find visible multiple-choice questions on this page.");
+  }
+
+  lastScans = results;
+  showOverlay(`Detected ${results.length} question(s).`, "success");
+
+  return {
+    questions: results.map((item) => ({
+      id: item.id,
+      questionText: item.questionText,
+      options: item.options,
+      pageTitle: item.pageTitle,
+      hostname: item.hostname
+    }))
+  };
+}
+
+function applySuggestionPanel(analysis, questionId) {
+  clearSuggestionPanel();
+
+  const target = lastScans.find((item) => item.id === questionId);
+  if (!target || !target.refs?.containerNode?.isConnected) {
+    throw new Error("Selected question is no longer visible. Re-scan questions.");
   }
 
   const answerText = normalizeWhitespace(analysis?.bestAnswerText || "");
   if (!answerText) {
-    throw new Error("No suggested answer text available. Please re-scan.");
+    throw new Error("No suggested answer text available.");
   }
 
   ensureStyles();
@@ -423,79 +419,46 @@ function applyHighlight(analysis) {
     ${explanation ? `<div class="qp-sub">${explanation}</div>` : ""}
   `;
 
-  const questionNode = lastScan.questionNode;
-  if (questionNode && questionNode.parentElement) {
-    questionNode.insertAdjacentElement("afterend", panel);
+  if (target.refs.questionNode && target.refs.questionNode.parentElement) {
+    target.refs.questionNode.insertAdjacentElement("afterend", panel);
   } else {
-    lastScan.containerNode.prepend(panel);
+    target.refs.containerNode.prepend(panel);
   }
 
   suggestionPanelNode = panel;
   panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  showOverlay("Suggestion shown beside the question.", "success");
-}
-
-function scanQuestion() {
-  showOverlay("Scanning visible question...");
-  const container = pickBestContainer();
-
-  if (!container) {
-    throw new Error("Could not find a visible quiz block. Scroll to the question and try again.");
-  }
-
-  const questionText = extractQuestionText(container);
-  const options = extractOptions(container, questionText);
-
-  if (!questionText || questionText.length < 8) {
-    throw new Error("Detected quiz block but question text is unclear.");
-  }
-
-  if (options.length < 2) {
-    throw new Error("Detected question text but not enough answer options.");
-  }
-
-  lastScan = {
-    questionText,
-    options,
-    questionNode: container.querySelector("h1, h2, h3, h4, legend, [role='heading'], p, .question, [data-question]"),
-    containerNode: container,
-    optionNodes: options.map((entry) => entry.element),
-    scannedAt: Date.now()
-  };
-
-  showOverlay(`Detected ${options.length} options.`, "success");
-
-  return {
-    questionText,
-    options: options.map((entry) => entry.text),
-    pageTitle: normalizeWhitespace(document.title || ""),
-    hostname: window.location.hostname
-  };
+  showOverlay("Suggestion shown beside selected question.", "success");
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   try {
     switch (message?.type) {
-      case "QUIZPILOT_SCAN": {
-        clearHighlighting();
-        clearSuggestionPanel();
-        const data = scanQuestion();
+      case "QUIZPILOT_SCAN_ALL": {
+        const data = scanAllQuestions();
         sendResponse({ ok: true, data });
+        return;
+      }
+      case "QUIZPILOT_SCAN": {
+        const data = scanAllQuestions();
+        sendResponse({ ok: true, data: data.questions[0] });
         return;
       }
       case "QUIZPILOT_HIGHLIGHT": {
         const analysis = message?.payload?.analysis;
+        const questionId = Number(message?.payload?.questionId);
         if (!analysis || typeof analysis !== "object") {
           throw new Error("Invalid analysis payload.");
         }
-        applyHighlight(analysis);
-        sendResponse({ ok: true, data: { highlighted: true } });
+        if (!Number.isInteger(questionId)) {
+          throw new Error("Invalid selected question.");
+        }
+        applySuggestionPanel(analysis, questionId);
+        sendResponse({ ok: true, data: { shown: true } });
         return;
       }
       case "QUIZPILOT_CLEAR_HIGHLIGHT": {
-        clearHighlighting();
         clearSuggestionPanel();
-        showOverlay("Highlight cleared.");
+        showOverlay("Suggestion cleared.");
         sendResponse({ ok: true, data: { cleared: true } });
         return;
       }

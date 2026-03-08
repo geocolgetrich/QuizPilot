@@ -10,11 +10,9 @@ function getConfigValue(key, fallback) {
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
-
   if (!tab?.id) {
     throw new Error("No active tab found.");
   }
-
   return tab;
 }
 
@@ -33,9 +31,7 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
     timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
   });
 
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
 
 async function sendToContent(tabId, message) {
@@ -46,12 +42,10 @@ async function sendToContent(tabId, message) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-
         if (!response || !response.ok) {
           reject(new Error(response?.error || "Content script error."));
           return;
         }
-
         resolve(response.data);
       });
     });
@@ -64,7 +58,6 @@ async function sendToContent(tabId, message) {
       throw error;
     }
 
-    // Fallback: inject content script into current tab, then retry once.
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["content.js"]
@@ -90,9 +83,9 @@ function clampConfidence(value) {
 async function analyzeQuestion(payload) {
   const timeoutMs = getConfigValue("REQUEST_TIMEOUT_MS", 20000);
   const maxRetries = getConfigValue("MAX_RETRIES", 1);
-  const stored = await chrome.storage.local.get(["backendUrl"]);
+  const stored = await chrome.storage.local.get(["backendUrlOverride"]);
   const backendUrl =
-    stored.backendUrl || getConfigValue("BACKEND_URL", "http://localhost:10000");
+    stored.backendUrlOverride || getConfigValue("BACKEND_URL", "http://localhost:10000");
 
   const requestBody = {
     questionText: payload.questionText,
@@ -127,7 +120,6 @@ async function analyzeQuestion(payload) {
         } catch {
           // Ignore non-JSON responses.
         }
-
         throw new Error(message);
       }
 
@@ -143,69 +135,109 @@ async function analyzeQuestion(payload) {
   }
 
   if (/Failed to fetch/i.test(lastError?.message || "")) {
-    throw new Error(
-      "Failed to reach backend. Check BACKEND_URL, Render service status, and ALLOWED_ORIGINS."
-    );
+    const healthError = await probeBackendHealth(backendUrl);
+    throw new Error(healthError);
   }
-
   throw new Error(lastError?.message || "Failed to reach backend.");
 }
 
-async function scanAndAnalyze() {
-  const tab = await getActiveTab();
-  const scanData = await sendToContent(tab.id, { type: "QUIZPILOT_SCAN" });
+async function probeBackendHealth(backendUrl) {
+  try {
+    const response = await withTimeout(
+      fetch(`${backendUrl}/health`, {
+        method: "GET",
+        headers: { Accept: "application/json" }
+      }),
+      12000,
+      "Health check timed out."
+    );
 
-  const analysis = await analyzeQuestion(scanData);
-  setTabState(tab.id, { scanData, analysis });
+    if (!response.ok) {
+      return `Backend is reachable but /health returned ${response.status}.`;
+    }
+
+    return "Backend is reachable, but browser blocked request to /analyze-question (likely CORS or extension host permission mismatch).";
+  } catch (error) {
+    return `Backend health probe failed: ${error.message || "unknown error"}. Check BACKEND_URL and Render deployment.`;
+  }
+}
+
+async function scanAllQuestions() {
+  const tab = await getActiveTab();
+  const data = await sendToContent(tab.id, { type: "QUIZPILOT_SCAN_ALL" });
+
+  setTabState(tab.id, {
+    scannedQuestions: data.questions,
+    selectedQuestionId: data.questions[0]?.id ?? null,
+    analysis: null
+  });
+
+  return {
+    scannedQuestions: data.questions,
+    selectedQuestionId: data.questions[0]?.id ?? null
+  };
+}
+
+async function analyzeSelectedQuestion(questionId) {
+  const tab = await getActiveTab();
+  const state = getTabState(tab.id);
+  const scannedQuestions = state?.scannedQuestions || [];
+
+  if (!Array.isArray(scannedQuestions) || scannedQuestions.length === 0) {
+    throw new Error("No scanned questions yet. Run Scan All Questions first.");
+  }
+
+  const selectedId = Number.isInteger(questionId) ? questionId : scannedQuestions[0].id;
+  const selectedQuestion = scannedQuestions.find((item) => item.id === selectedId);
+  if (!selectedQuestion) {
+    throw new Error("Selected question no longer available. Scan again.");
+  }
+
+  const analysis = await analyzeQuestion(selectedQuestion);
+  setTabState(tab.id, { analysis, selectedQuestionId: selectedId });
 
   const { autoHighlight } = await chrome.storage.local.get(["autoHighlight"]);
   if (autoHighlight) {
     await sendToContent(tab.id, {
       type: "QUIZPILOT_HIGHLIGHT",
-      payload: { analysis }
+      payload: { analysis, questionId: selectedId }
     });
   }
 
-  return { scanData, analysis };
+  return { analysis, selectedQuestionId: selectedId };
 }
 
-async function highlightLastResult() {
+async function showLastResult() {
   const tab = await getActiveTab();
   const state = getTabState(tab.id);
-
-  if (!state?.analysis) {
-    throw new Error("No analyzed question yet. Run Scan Current Question first.");
+  if (!state?.analysis || !Number.isInteger(state?.selectedQuestionId)) {
+    throw new Error("No analyzed question yet.");
   }
 
   await sendToContent(tab.id, {
     type: "QUIZPILOT_HIGHLIGHT",
-    payload: { analysis: state.analysis }
+    payload: { analysis: state.analysis, questionId: state.selectedQuestionId }
   });
 
-  return { analysis: state.analysis, scanData: state.scanData };
+  return { analysis: state.analysis, selectedQuestionId: state.selectedQuestionId };
 }
 
 async function explainLastResult() {
   const tab = await getActiveTab();
   const state = getTabState(tab.id);
-
   if (!state?.analysis) {
-    throw new Error("No explanation available yet. Scan a question first.");
+    throw new Error("No explanation available yet. Analyze a question first.");
   }
-
-  return { analysis: state.analysis, scanData: state.scanData };
+  return { analysis: state.analysis, selectedQuestionId: state.selectedQuestionId };
 }
 
 async function getCurrentState() {
   const tab = await getActiveTab();
-  const state = getTabState(tab.id);
-  if (!state) {
-    return {};
-  }
-
+  const state = getTabState(tab.id) || {};
   return {
-    analysis: state.analysis,
-    scanData: state.scanData,
+    scannedQuestions: state.scannedQuestions || [],
+    selectedQuestionId: state.selectedQuestionId ?? null,
+    analysis: state.analysis || null,
     updatedAt: state.updatedAt
   };
 }
@@ -213,10 +245,12 @@ async function getCurrentState() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const action = async () => {
     switch (message?.type) {
-      case "QUIZPILOT_SCAN_AND_ANALYZE":
-        return scanAndAnalyze();
+      case "QUIZPILOT_SCAN_ALL_QUESTIONS":
+        return scanAllQuestions();
+      case "QUIZPILOT_ANALYZE_SELECTED_QUESTION":
+        return analyzeSelectedQuestion(Number(message?.payload?.questionId));
       case "QUIZPILOT_HIGHLIGHT_LAST":
-        return highlightLastResult();
+        return showLastResult();
       case "QUIZPILOT_EXPLAIN_LAST":
         return explainLastResult();
       case "QUIZPILOT_GET_STATE":
@@ -241,14 +275,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(["autoHighlight", "backendUrl"]);
+  const existing = await chrome.storage.local.get([
+    "autoHighlight",
+    "backendUrl",
+    "backendUrlOverride"
+  ]);
 
   if (typeof existing.autoHighlight === "undefined") {
     await chrome.storage.local.set({ autoHighlight: false });
   }
 
-  if (!existing.backendUrl) {
+  if (!existing.backendUrlOverride && existing.backendUrl) {
     const fallbackUrl = getConfigValue("BACKEND_URL", "http://localhost:10000");
-    await chrome.storage.local.set({ backendUrl: fallbackUrl });
+    if (existing.backendUrl !== fallbackUrl) {
+      await chrome.storage.local.set({ backendUrlOverride: existing.backendUrl });
+    }
+  }
+
+  if (existing.backendUrl) {
+    await chrome.storage.local.remove("backendUrl");
   }
 });
