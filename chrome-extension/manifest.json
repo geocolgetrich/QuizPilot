@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "QuizPilot",
+  "description": "AI-assisted quiz practice helper for visible multiple-choice study questions.",
+  "version": "1.0.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "QuizPilot"
+  },
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": [
+    "http://localhost:10000/*",
+    "https://*.onrender.com/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuizPilot</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="popup">
+    <header class="header">
+      <h1>QuizPilot</h1>
+      <p>Study-only MCQ assistant</p>
+    </header>
+
+    <section class="actions">
+      <button id="scanBtn" class="btn btn-primary">Scan Current Question</button>
+      <button id="highlightBtn" class="btn">Highlight Best Answer</button>
+      <button id="explainBtn" class="btn">Explain Answer</button>
+    </section>
+
+    <label class="toggle-row" for="autoHighlightToggle">
+      <input type="checkbox" id="autoHighlightToggle" />
+      <span>Auto-highlight after scan</span>
+    </label>
+
+    <section class="status-card" id="statusCard" aria-live="polite">
+      <p id="statusText">Ready.</p>
+    </section>
+
+    <section class="result-card" id="resultCard" hidden>
+      <h2>Suggestion</h2>
+      <p><strong>Best answer:</strong> <span id="bestAnswerText">-</span></p>
+      <p><strong>Confidence:</strong> <span id="confidenceText">-</span></p>
+      <p id="lowConfidenceNote" class="warning" hidden>Low confidence: verify manually.</p>
+      <p><strong>Why:</strong></p>
+      <p id="explanationText">-</p>
+    </section>
+
+    <footer class="footer">
+      <small>Only use in user-authorized study environments.</small>
+    </footer>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
