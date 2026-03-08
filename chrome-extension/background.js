@@ -87,7 +87,13 @@ async function analyzeQuestion(payload) {
   const configBackendUrl = getConfigValue("BACKEND_URL", "http://localhost:10000");
   const urlCandidates = [];
   if (stored.backendUrlOverride) {
-    urlCandidates.push(stored.backendUrlOverride);
+    const override = String(stored.backendUrlOverride).trim();
+    const configIsRemote = /^https:\/\//i.test(configBackendUrl);
+    const overrideIsLocalhost = /^http:\/\/localhost(?::\d+)?/i.test(override);
+    // Ignore stale localhost override when config points to remote backend.
+    if (!(configIsRemote && overrideIsLocalhost)) {
+      urlCandidates.push(override);
+    }
   }
   if (!urlCandidates.includes(configBackendUrl)) {
     urlCandidates.push(configBackendUrl);
@@ -302,6 +308,18 @@ chrome.runtime.onInstalled.addListener(async () => {
     const fallbackUrl = getConfigValue("BACKEND_URL", "http://localhost:10000");
     if (existing.backendUrl !== fallbackUrl) {
       await chrome.storage.local.set({ backendUrlOverride: existing.backendUrl });
+    }
+  }
+
+  // Clean up stale localhost override when config now points to remote backend.
+  if (existing.backendUrlOverride) {
+    const configBackendUrl = getConfigValue("BACKEND_URL", "http://localhost:10000");
+    const configIsRemote = /^https:\/\//i.test(configBackendUrl);
+    const overrideIsLocalhost = /^http:\/\/localhost(?::\d+)?/i.test(
+      String(existing.backendUrlOverride).trim()
+    );
+    if (configIsRemote && overrideIsLocalhost) {
+      await chrome.storage.local.remove("backendUrlOverride");
     }
   }
 
