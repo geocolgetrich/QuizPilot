@@ -15,6 +15,8 @@ const port = Number(process.env.PORT || 10000);
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 60);
+const allowAllChromeExtensions =
+  String(process.env.ALLOW_ALL_CHROME_EXTENSION_ORIGINS || "true").toLowerCase() === "true";
 
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -40,6 +42,11 @@ app.use(
   cors({
     origin(origin, callback) {
       if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (allowAllChromeExtensions && /^chrome-extension:\/\//i.test(origin)) {
         callback(null, true);
         return;
       }
@@ -113,5 +120,6 @@ app.use((error, _req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`[startup] QuizPilot backend running on port ${port}`);
+  console.log(`[startup] Allow all Chrome extension origins: ${allowAllChromeExtensions}`);
   console.log(`[startup] Allowed origins: ${allowedOrigins.join(", ") || "(any - set ALLOWED_ORIGINS)"}`);
 });
