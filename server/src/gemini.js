@@ -2,6 +2,10 @@ const { sanitizeText } = require("./validation");
 
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 25000);
+const MODEL_CACHE_TTL_MS = Number(process.env.GEMINI_MODEL_CACHE_TTL_MS || 5 * 60 * 1000);
+
+let cachedModelNames = [];
+let cachedAt = 0;
 
 function extractModelText(responseJson) {
   const candidate = responseJson?.candidates?.[0];
@@ -27,6 +31,65 @@ function extractJsonObject(text) {
     return "";
   }
   return text.slice(start, end + 1);
+}
+
+function normalizeModelName(name) {
+  const normalized = sanitizeText(name);
+  return normalized.replace(/^models\//i, "");
+}
+
+function shouldUseCache() {
+  return cachedModelNames.length > 0 && Date.now() - cachedAt < MODEL_CACHE_TTL_MS;
+}
+
+async function listAvailableGenerateModels(apiKey) {
+  if (shouldUseCache()) {
+    return cachedModelNames;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(
+      `${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`ListModels failed (${response.status}): ${sanitizeText(text).slice(0, 300)}`);
+    }
+
+    const data = await response.json();
+    const models = Array.isArray(data?.models) ? data.models : [];
+    const available = models
+      .filter((item) =>
+        Array.isArray(item?.supportedGenerationMethods) &&
+        item.supportedGenerationMethods.includes("generateContent")
+      )
+      .map((item) => normalizeModelName(item?.name))
+      .filter(Boolean);
+
+    if (available.length === 0) {
+      throw new Error("ListModels returned no models that support generateContent.");
+    }
+
+    cachedModelNames = available;
+    cachedAt = Date.now();
+    return available;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("ListModels timed out.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function clampConfidence(value) {
@@ -163,10 +226,18 @@ async function callGeminiWithModel({ questionText, options, context, apiKey, mod
 }
 
 async function callGemini({ questionText, options, context, apiKey, model }) {
-  const candidateModels = [model, "gemini-1.5-flash", "gemini-1.5-flash-8b"]
-    .map((item) => sanitizeText(item))
-    .filter(Boolean)
-    .filter((item, index, arr) => arr.indexOf(item) === index);
+  const preferred = [
+    normalizeModelName(model),
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
+  ].filter(Boolean);
+
+  const available = await listAvailableGenerateModels(apiKey);
+  const candidateModels = [
+    ...preferred.filter((item) => available.includes(item)),
+    ...available
+  ].filter((item, index, arr) => arr.indexOf(item) === index);
 
   let lastError;
   for (const candidateModel of candidateModels) {
