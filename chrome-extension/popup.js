@@ -82,8 +82,8 @@ autoHighlightToggle.addEventListener("change", async () => {
   await chrome.storage.local.set({ autoHighlight: autoHighlightToggle.checked });
   setStatus(
     autoHighlightToggle.checked
-      ? "Auto-highlight enabled."
-      : "Auto-highlight disabled.",
+      ? "Auto-show enabled."
+      : "Auto-show disabled.",
     "success"
   );
 });
@@ -105,14 +105,14 @@ scanBtn.addEventListener("click", async () => {
 
 highlightBtn.addEventListener("click", async () => {
   setButtonsDisabled(true);
-  setStatus("Applying highlight on the page...");
+  setStatus("Placing suggestion beside the question...");
 
   try {
     const data = await sendRuntimeMessage("QUIZPILOT_HIGHLIGHT_LAST");
     renderResult(data.analysis);
-    setStatus("Best answer highlighted.", "success");
+    setStatus("Suggestion placed beside the question.", "success");
   } catch (error) {
-    setStatus(error.message || "No result to highlight yet.", "error");
+    setStatus(error.message || "No result to show yet.", "error");
   } finally {
     setButtonsDisabled(false);
   }

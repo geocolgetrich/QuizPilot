@@ -1,9 +1,11 @@
 const OVERLAY_ID = "qp-floating-overlay";
 const HIGHLIGHT_CLASS = "qp-suggested-answer";
 const BADGE_CLASS = "qp-suggested-badge";
+const PANEL_ID = "qp-question-suggestion-panel";
 
 let lastScan = null;
 let highlightedNodes = [];
+let suggestionPanelNode = null;
 let injectedStyleTag = null;
 
 function ensureStyles() {
@@ -51,6 +53,24 @@ function ensureStyles() {
     #${OVERLAY_ID}.visible {
       opacity: 0.96;
       transform: translateY(0);
+    }
+    #${PANEL_ID} {
+      margin: 10px 0 12px;
+      padding: 10px 12px;
+      border: 2px solid #22c55e;
+      border-radius: 12px;
+      background: #ecfdf5;
+      color: #14532d;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+    }
+    #${PANEL_ID} .qp-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    #${PANEL_ID} .qp-sub {
+      font-size: 12px;
+      opacity: 0.9;
+      margin-top: 4px;
     }
   `;
 
@@ -282,8 +302,51 @@ function extractOptions(container, questionText) {
     }
   }
 
+  // Fallback for quiz UIs that render options as plain div blocks with no
+  // input/label semantics.
+  if (rawOptions.length < 2) {
+    const blockCandidates = Array.from(container.querySelectorAll("div, button, li, p"));
+    for (const candidate of blockCandidates) {
+      if (!isVisible(candidate)) {
+        continue;
+      }
+
+      // Skip high-level containers that have many nested elements.
+      if (candidate.children.length > 4) {
+        continue;
+      }
+
+      const text = cleanOptionText(getTextFromElement(candidate));
+      if (!text || text === questionText) {
+        continue;
+      }
+
+      // Keep short, option-like blocks and ignore long paragraph content.
+      if (text.length < 1 || text.length > 120) {
+        continue;
+      }
+
+      // Avoid parent blocks whose text is just aggregation of child options.
+      const childOptionLike = Array.from(candidate.children).filter((child) => {
+        const childText = cleanOptionText(getTextFromElement(child));
+        return childText.length >= 1 && childText.length <= 120;
+      }).length;
+      if (childOptionLike >= 2) {
+        continue;
+      }
+
+      rawOptions.push({ text, element: candidate });
+    }
+  }
+
   const uniqueOptions = uniqueByText(rawOptions).filter((entry) => entry.text !== questionText);
-  return uniqueOptions.slice(0, 10);
+
+  // Prefer option counts that look like normal MCQ blocks.
+  if (uniqueOptions.length > 10) {
+    return uniqueOptions.slice(0, 10);
+  }
+
+  return uniqueOptions;
 }
 
 function showOverlay(message, type = "info") {
@@ -325,31 +388,51 @@ function clearHighlighting() {
   highlightedNodes = [];
 }
 
-function applyHighlight(bestAnswerIndex) {
-  clearHighlighting();
+function clearSuggestionPanel() {
+  if (suggestionPanelNode && suggestionPanelNode.isConnected) {
+    suggestionPanelNode.remove();
+  }
+  suggestionPanelNode = null;
+}
 
-  if (!lastScan || !Array.isArray(lastScan.optionNodes) || lastScan.optionNodes.length === 0) {
-    throw new Error("No question has been scanned on this page yet.");
+function applyHighlight(analysis) {
+  clearHighlighting();
+  clearSuggestionPanel();
+
+  if (!lastScan?.containerNode || !lastScan.containerNode.isConnected) {
+    throw new Error("Question block is no longer visible. Please re-scan.");
   }
 
-  const target = lastScan.optionNodes[bestAnswerIndex];
-  if (!target || !target.isConnected) {
-    throw new Error("Suggested option is no longer visible. Please re-scan.");
+  const answerText = normalizeWhitespace(analysis?.bestAnswerText || "");
+  if (!answerText) {
+    throw new Error("No suggested answer text available. Please re-scan.");
   }
 
   ensureStyles();
 
-  target.classList.add(HIGHLIGHT_CLASS);
+  const confidence = Number.isFinite(analysis?.confidence)
+    ? Math.round(Math.max(0, Math.min(1, analysis.confidence)) * 100)
+    : 0;
+  const explanation = normalizeWhitespace(analysis?.explanation || "");
 
-  const badge = document.createElement("span");
-  badge.className = BADGE_CLASS;
-  badge.textContent = "QuizPilot suggestion";
+  const panel = document.createElement("div");
+  panel.id = PANEL_ID;
+  panel.innerHTML = `
+    <div class="qp-title">QuizPilot suggestion: ${answerText}</div>
+    <div>Confidence: ${confidence}%</div>
+    ${explanation ? `<div class="qp-sub">${explanation}</div>` : ""}
+  `;
 
-  target.appendChild(badge);
-  highlightedNodes.push({ optionElement: target, badgeNode: badge });
+  const questionNode = lastScan.questionNode;
+  if (questionNode && questionNode.parentElement) {
+    questionNode.insertAdjacentElement("afterend", panel);
+  } else {
+    lastScan.containerNode.prepend(panel);
+  }
 
-  target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  showOverlay("Best answer highlighted.", "success");
+  suggestionPanelNode = panel;
+  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  showOverlay("Suggestion shown beside the question.", "success");
 }
 
 function scanQuestion() {
@@ -374,6 +457,8 @@ function scanQuestion() {
   lastScan = {
     questionText,
     options,
+    questionNode: container.querySelector("h1, h2, h3, h4, legend, [role='heading'], p, .question, [data-question]"),
+    containerNode: container,
     optionNodes: options.map((entry) => entry.element),
     scannedAt: Date.now()
   };
@@ -393,21 +478,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message?.type) {
       case "QUIZPILOT_SCAN": {
         clearHighlighting();
+        clearSuggestionPanel();
         const data = scanQuestion();
         sendResponse({ ok: true, data });
         return;
       }
       case "QUIZPILOT_HIGHLIGHT": {
-        const bestAnswerIndex = Number(message?.payload?.bestAnswerIndex);
-        if (!Number.isInteger(bestAnswerIndex) || bestAnswerIndex < 0) {
-          throw new Error("Invalid bestAnswerIndex value.");
+        const analysis = message?.payload?.analysis;
+        if (!analysis || typeof analysis !== "object") {
+          throw new Error("Invalid analysis payload.");
         }
-        applyHighlight(bestAnswerIndex);
+        applyHighlight(analysis);
         sendResponse({ ok: true, data: { highlighted: true } });
         return;
       }
       case "QUIZPILOT_CLEAR_HIGHLIGHT": {
         clearHighlighting();
+        clearSuggestionPanel();
         showOverlay("Highlight cleared.");
         sendResponse({ ok: true, data: { cleared: true } });
         return;

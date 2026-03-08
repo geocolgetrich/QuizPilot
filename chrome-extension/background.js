@@ -39,21 +39,39 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
 }
 
 async function sendToContent(tabId, message) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
+  async function trySend() {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
 
-      if (!response || !response.ok) {
-        reject(new Error(response?.error || "Content script error."));
-        return;
-      }
+        if (!response || !response.ok) {
+          reject(new Error(response?.error || "Content script error."));
+          return;
+        }
 
-      resolve(response.data);
+        resolve(response.data);
+      });
     });
-  });
+  }
+
+  try {
+    return await trySend();
+  } catch (error) {
+    if (!/Receiving end does not exist/i.test(error.message || "")) {
+      throw error;
+    }
+
+    // Fallback: inject content script into current tab, then retry once.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+
+    return trySend();
+  }
 }
 
 function clampConfidence(value) {
@@ -124,6 +142,12 @@ async function analyzeQuestion(payload) {
     }
   }
 
+  if (/Failed to fetch/i.test(lastError?.message || "")) {
+    throw new Error(
+      "Failed to reach backend. Check BACKEND_URL, Render service status, and ALLOWED_ORIGINS."
+    );
+  }
+
   throw new Error(lastError?.message || "Failed to reach backend.");
 }
 
@@ -138,7 +162,7 @@ async function scanAndAnalyze() {
   if (autoHighlight) {
     await sendToContent(tab.id, {
       type: "QUIZPILOT_HIGHLIGHT",
-      payload: { bestAnswerIndex: analysis.bestAnswerIndex }
+      payload: { analysis }
     });
   }
 
@@ -155,7 +179,7 @@ async function highlightLastResult() {
 
   await sendToContent(tab.id, {
     type: "QUIZPILOT_HIGHLIGHT",
-    payload: { bestAnswerIndex: state.analysis.bestAnswerIndex }
+    payload: { analysis: state.analysis }
   });
 
   return { analysis: state.analysis, scanData: state.scanData };
