@@ -195,40 +195,6 @@ async function refundOneCredit(uid) {
   });
 }
 
-async function exchangeGoogleAccessToken(googleAccessToken) {
-  if (!firebaseWebApiKey) {
-    throw new Error("Server is missing FIREBASE_WEB_API_KEY.");
-  }
-
-  const endpoint = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=${encodeURIComponent(firebaseWebApiKey)}`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      postBody: `access_token=${encodeURIComponent(googleAccessToken)}&providerId=google.com`,
-      requestUri: "https://quizpilot.app",
-      returnSecureToken: true,
-      returnIdpCredential: true
-    })
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    const safe = sanitizeText(text).slice(0, 500);
-    if (/INVALID_IDP_RESPONSE|audience is not for this project/i.test(safe)) {
-      const err = new Error(
-        `Firebase IdP exchange failed (${response.status}): Google token audience does not match Firebase project. ` +
-          `Use FIREBASE_WEB_API_KEY from the same Firebase project as your OAuth client. Raw: ${safe}`
-      );
-      err.statusCode = 400;
-      throw err;
-    }
-    throw new Error(`Firebase IdP exchange failed (${response.status}): ${safe}`);
-  }
-
-  return response.json();
-}
-
 async function inspectGoogleAccessToken(googleAccessToken) {
   const endpoint = `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(googleAccessToken)}`;
   const response = await fetch(endpoint, {
@@ -246,10 +212,38 @@ async function inspectGoogleAccessToken(googleAccessToken) {
   }
 
   return {
+    sub: sanitizeText(payload.sub),
     aud: sanitizeText(payload.aud),
     azp: sanitizeText(payload.azp),
-    email: sanitizeText(payload.email)
+    email: sanitizeText(payload.email),
+    name: sanitizeText(payload.name),
+    picture: sanitizeText(payload.picture)
   };
+}
+
+async function exchangeCustomToken(customToken) {
+  if (!firebaseWebApiKey) {
+    throw new Error("Server is missing FIREBASE_WEB_API_KEY.");
+  }
+
+  const endpoint = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(firebaseWebApiKey)}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      token: customToken,
+      returnSecureToken: true
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    const err = new Error(`Firebase custom token exchange failed (${response.status}): ${sanitizeText(text).slice(0, 500)}`);
+    err.statusCode = 502;
+    throw err;
+  }
+
+  return response.json();
 }
 
 function healthPayload() {
@@ -308,17 +302,48 @@ async function handleGoogleAuth(req, res, next) {
       throw err;
     }
 
-    const exchange = await exchangeGoogleAccessToken(googleAccessToken);
-    const firebaseIdToken = sanitizeText(exchange.idToken);
-    if (!firebaseIdToken) {
-      throw new Error("Firebase exchange did not return idToken.");
+    const uid = sanitizeText(tokenInfo.sub) ? `google:${sanitizeText(tokenInfo.sub)}` : "";
+    if (!uid) {
+      const err = new Error("Google token did not contain a valid subject.");
+      err.statusCode = 401;
+      throw err;
     }
 
-    const decoded = await getAuth().verifyIdToken(firebaseIdToken);
+    const auth = getAuth();
+    const existingUser = await auth
+      .getUser(uid)
+      .catch((error) => (error?.code === "auth/user-not-found" ? null : Promise.reject(error)));
+
+    if (!existingUser) {
+      await auth.createUser({
+        uid,
+        email: tokenInfo.email || undefined,
+        displayName: tokenInfo.name || undefined,
+        photoURL: tokenInfo.picture || undefined
+      });
+    } else {
+      await auth.updateUser(uid, {
+        email: tokenInfo.email || undefined,
+        displayName: tokenInfo.name || undefined,
+        photoURL: tokenInfo.picture || undefined
+      });
+    }
+
+    const customToken = await auth.createCustomToken(uid, {
+      provider: "google",
+      googleAud: tokenInfo.aud
+    });
+    const firebaseExchange = await exchangeCustomToken(customToken);
+    const firebaseIdToken = sanitizeText(firebaseExchange.idToken);
+    if (!firebaseIdToken) {
+      throw new Error("Firebase custom token exchange did not return idToken.");
+    }
+
+    const decoded = await auth.verifyIdToken(firebaseIdToken);
     const profile = {
-      email: sanitizeText(exchange.email || decoded.email),
-      name: sanitizeText(exchange.displayName || decoded.name),
-      picture: sanitizeText(exchange.photoUrl || decoded.picture)
+      email: sanitizeText(tokenInfo.email || decoded.email),
+      name: sanitizeText(tokenInfo.name || decoded.name),
+      picture: sanitizeText(tokenInfo.picture || decoded.picture)
     };
     const userDoc = await ensureUserDoc(decoded.uid, profile);
 
