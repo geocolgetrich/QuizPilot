@@ -19,6 +19,7 @@ const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 60);
 const corsStrictMode = String(process.env.CORS_STRICT_MODE || "false").toLowerCase() === "true";
 const starterCredits = Number(process.env.STARTER_CREDITS || 100);
 const firebaseWebApiKey = process.env.FIREBASE_WEB_API_KEY;
+const googleOAuthClientId = sanitizeText(process.env.GOOGLE_OAUTH_CLIENT_ID);
 
 const allowedOrigins = String(process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -33,6 +34,9 @@ if (!firebaseReady) {
 }
 if (!firebaseWebApiKey) {
   console.warn("[startup] FIREBASE_WEB_API_KEY is missing. /auth/google will fail until configured.");
+}
+if (!googleOAuthClientId) {
+  console.warn("[startup] GOOGLE_OAUTH_CLIENT_ID is not set. Audience checks are disabled.");
 }
 
 app.use(
@@ -210,10 +214,42 @@ async function exchangeGoogleAccessToken(googleAccessToken) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Firebase IdP exchange failed (${response.status}): ${sanitizeText(text).slice(0, 400)}`);
+    const safe = sanitizeText(text).slice(0, 500);
+    if (/INVALID_IDP_RESPONSE|audience is not for this project/i.test(safe)) {
+      const err = new Error(
+        `Firebase IdP exchange failed (${response.status}): Google token audience does not match Firebase project. ` +
+          `Use FIREBASE_WEB_API_KEY from the same Firebase project as your OAuth client. Raw: ${safe}`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    throw new Error(`Firebase IdP exchange failed (${response.status}): ${safe}`);
   }
 
   return response.json();
+}
+
+async function inspectGoogleAccessToken(googleAccessToken) {
+  const endpoint = `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(googleAccessToken)}`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json" }
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error) {
+    const err = new Error(
+      `Google access token validation failed: ${sanitizeText(payload?.error_description || payload?.error || "unknown error")}`
+    );
+    err.statusCode = 401;
+    throw err;
+  }
+
+  return {
+    aud: sanitizeText(payload.aud),
+    azp: sanitizeText(payload.azp),
+    email: sanitizeText(payload.email)
+  };
 }
 
 function healthPayload() {
@@ -259,6 +295,15 @@ async function handleGoogleAuth(req, res, next) {
     const googleAccessToken = sanitizeText(req.body?.googleAccessToken);
     if (!googleAccessToken) {
       const err = new Error("googleAccessToken is required.");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const tokenInfo = await inspectGoogleAccessToken(googleAccessToken);
+    if (googleOAuthClientId && tokenInfo.aud && tokenInfo.aud !== googleOAuthClientId) {
+      const err = new Error(
+        `Google token audience mismatch. Token aud=${tokenInfo.aud}. Expected GOOGLE_OAUTH_CLIENT_ID=${googleOAuthClientId}.`
+      );
       err.statusCode = 400;
       throw err;
     }

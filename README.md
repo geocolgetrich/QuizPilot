@@ -83,6 +83,7 @@ Set these Render environment variables:
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` (example: `gemini-2.0-flash`)
 - `FIREBASE_WEB_API_KEY`
+- `GOOGLE_OAUTH_CLIENT_ID` (must match `chrome-extension/manifest.json` `oauth2.client_id`)
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_CLIENT_EMAIL`
 - `FIREBASE_PRIVATE_KEY`
@@ -123,6 +124,11 @@ Both plain and `/api` prefixed routes are supported:
 - `Google OAuth client_id is not configured`:
   - Fill `manifest.json > oauth2.client_id` and reload extension.
 
+- `INVALID_IDP_RESPONSE ... access_token audience is not for this project`:
+  - Your `FIREBASE_WEB_API_KEY` is from a different Firebase project than the OAuth client in `manifest.json`.
+  - Ensure both belong to the same Firebase/Google Cloud project.
+  - Set `GOOGLE_OAUTH_CLIENT_ID` in Render to the same value as manifest.
+
 - `Failed to reach backend`:
   - Check `chrome-extension/config.js` `BACKEND_URL`.
   - Check Render logs and service is deployed.
@@ -132,4 +138,3 @@ Both plain and `/api` prefixed routes are supported:
 
 - Too many detected questions:
   - Current scanner prioritizes numbered visible MCQ questions and caps scan/analyze limits from `config.js`.
-
