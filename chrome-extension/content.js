@@ -1,9 +1,19 @@
 const OVERLAY_ID = "qp-floating-overlay";
-const PANEL_ID = "qp-question-suggestion-panel";
+const PANEL_CLASS = "qp-question-suggestion-panel";
+const LAUNCHER_ID = "qp-mini-launcher";
 
 let lastScans = [];
-let suggestionPanelNode = null;
+let suggestionPanelNodes = [];
 let injectedStyleTag = null;
+
+function canonicalQuestionKey(text) {
+  return normalizeWhitespace(String(text || ""))
+    .replace(/^\s*\d+\s*[\).:-]\s*/i, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
 function ensureStyles() {
   if (injectedStyleTag) {
@@ -33,27 +43,97 @@ function ensureStyles() {
       opacity: 0.96;
       transform: translateY(0);
     }
-    #${PANEL_ID} {
-      margin: 10px 0 12px;
-      padding: 10px 12px;
-      border: 2px solid #22c55e;
-      border-radius: 12px;
-      background: #ecfdf5;
-      color: #14532d;
-      font: 13px/1.45 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+    .${PANEL_CLASS} {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 4px 0 6px;
+      padding: 2px 6px;
+      border: 1px solid rgba(71, 85, 105, 0.35);
+      border-radius: 999px;
+      background: rgba(241, 245, 249, 0.8);
+      color: #334155;
+      font: 11px/1.2 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+      opacity: 0.65;
+      cursor: pointer;
     }
-    #${PANEL_ID} .qp-title {
-      font-weight: 700;
-      margin-bottom: 4px;
+    .${PANEL_CLASS} .qp-title {
+      font-weight: 600;
     }
-    #${PANEL_ID} .qp-sub {
-      font-size: 12px;
-      opacity: 0.9;
-      margin-top: 4px;
+    .${PANEL_CLASS} .qp-answer {
+      display: none;
+      font-weight: 500;
+    }
+    .${PANEL_CLASS}.qp-open .qp-answer {
+      display: inline;
+    }
+    #${LAUNCHER_ID} {
+      position: fixed;
+      right: 14px;
+      bottom: 88px;
+      z-index: 2147483646;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 23, 42, 0.18);
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.9), rgba(241, 245, 249, 0.92) 48%, rgba(226, 232, 240, 0.95) 100%);
+      color: #0f172a;
+      font: 700 11px/1 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+      letter-spacing: 0.3px;
+      opacity: 0.82;
+      cursor: pointer;
+      box-shadow:
+        0 4px 12px rgba(15, 23, 42, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(3px);
+      transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+    }
+    #${LAUNCHER_ID}:hover {
+      opacity: 1;
+      transform: translateY(-1px);
+      box-shadow:
+        0 8px 16px rgba(15, 23, 42, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.78);
     }
   `;
 
   document.documentElement.appendChild(injectedStyleTag);
+}
+
+function ensureLauncher() {
+  ensureStyles();
+  if (document.getElementById(LAUNCHER_ID)) {
+    return;
+  }
+
+  const launcher = document.createElement("button");
+  launcher.id = LAUNCHER_ID;
+  launcher.type = "button";
+  launcher.textContent = "qp";
+  launcher.title = "QuizPilot: scan and solve all";
+  launcher.addEventListener("click", async () => {
+    try {
+      showOverlay("Scanning and solving all questions...");
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: "QUIZPILOT_ONE_CLICK_SOLVE" }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response?.ok) {
+            reject(new Error(response?.error || "One-click solve failed."));
+            return;
+          }
+          resolve(response.data);
+        });
+      });
+    } catch (error) {
+      showOverlay(error?.message || "One-click solve failed.", "error");
+    }
+  });
+
+  document.documentElement.appendChild(launcher);
 }
 
 function isVisible(element) {
@@ -70,10 +150,7 @@ function isVisible(element) {
   if (rect.width < 1 || rect.height < 1) {
     return false;
   }
-
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-  return rect.bottom > 0 && rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth;
+  return true;
 }
 
 function normalizeWhitespace(input) {
@@ -113,14 +190,14 @@ function getVisibleContainers() {
     }
 
     const text = getTextFromElement(element);
-    if (text.length < 30 || text.length > 3000) {
+    if (text.length < 20 || text.length > 6000) {
       return false;
     }
 
     const optionsCount = element.querySelectorAll(
       "input[type='radio'], input[type='checkbox'], [role='radio'], [role='option'], label, li, button, .option, .answer, .choice"
     ).length;
-    return optionsCount >= 2;
+    return optionsCount >= 1 || text.includes("?");
   });
 }
 
@@ -143,12 +220,55 @@ function scoreContainer(container) {
     score += 2;
   }
 
-  const rect = container.getBoundingClientRect();
-  if (rect.top >= -80 && rect.top <= window.innerHeight * 0.7) {
-    score += 1;
+  return score;
+}
+
+function extractQuestionNumber(questionText) {
+  const match = String(questionText || "").match(/^\s*(\d+)\s*[\).:-]\s+/);
+  if (!match) {
+    return null;
+  }
+  return Number(match[1]);
+}
+
+function isLikelyQuestionText(text) {
+  const normalized = normalizeWhitespace(text || "");
+  if (normalized.length < 12 || normalized.length > 500) {
+    return false;
+  }
+  if (!normalized.includes("?")) {
+    return false;
   }
 
-  return score;
+  // Sentence-like question with enough words.
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length < 4) {
+    return false;
+  }
+
+  // Reject obvious non-question UI snippets.
+  const low = normalized.toLowerCase();
+  const blocked = [
+    "subscribe?",
+    "profile?",
+    "playlist?",
+    "quizzes?",
+    "start quiz?",
+    "featured quiz?",
+    "more quiz info?",
+    "last updated?",
+    "rate?"
+  ];
+  if (blocked.some((token) => low.includes(token))) {
+    return false;
+  }
+
+  // Must look like a normal question sentence.
+  const hasQuestionWord = /\b(what|which|who|when|where|why|how|true|false|select|choose|is|are|does|do|can)\b/i.test(
+    normalized
+  );
+  const hasSentencePattern = /^[\d\)\.\-\s]*[A-Z].+\?$/.test(normalized);
+  return hasQuestionWord || hasSentencePattern;
 }
 
 function getQuestionNode(container) {
@@ -171,10 +291,7 @@ function getQuestionNode(container) {
         continue;
       }
       const text = getTextFromElement(node);
-      if (text.length < 12 || text.length > 500) {
-        continue;
-      }
-      if (text.includes("?") || /choose|select|which|what|true|false/i.test(text)) {
+      if (isLikelyQuestionText(text)) {
         return node;
       }
     }
@@ -316,31 +433,104 @@ function showOverlay(message, type = "info") {
 }
 
 function clearSuggestionPanel() {
-  if (suggestionPanelNode && suggestionPanelNode.isConnected) {
-    suggestionPanelNode.remove();
+  for (const panel of suggestionPanelNodes) {
+    if (panel?.isConnected) {
+      panel.remove();
+    }
   }
-  suggestionPanelNode = null;
+  suggestionPanelNodes = [];
 }
 
 function parseContainerToQuestion(container, id) {
-  const questionText = extractQuestionText(container);
+  const questionNode = getQuestionNode(container);
+  const questionText = questionNode ? getTextFromElement(questionNode) : extractQuestionText(container);
   const options = extractOptions(container, questionText);
+  return buildQuestionRecord({
+    id,
+    questionText,
+    options,
+    containerNode: container,
+    questionNode
+  });
+}
 
-  if (!questionText || questionText.length < 8 || options.length < 2) {
+function buildQuestionRecord({ id, questionText, options, containerNode, questionNode }) {
+  const displayNumber = extractQuestionNumber(questionText);
+
+  if (!questionText || questionText.length < 8 || !Array.isArray(options) || options.length < 2) {
     return null;
   }
+  // Strong guardrail to prevent non-quiz noise explosions:
+  // keep only numbered question lines like "4. ...?".
+  if (!Number.isInteger(displayNumber)) {
+    return null;
+  }
+  const answerLikeCount = options.filter((opt) => {
+    const text = String(opt?.text || opt || "").trim();
+    return text.length >= 1 && text.length <= 180;
+  }).length;
+  if (answerLikeCount < 2 || options.length > 8) return null;
 
   return {
     id,
+    displayNumber,
     questionText,
     options: options.map((entry) => entry.text),
     pageTitle: normalizeWhitespace(document.title || ""),
     hostname: window.location.hostname,
     refs: {
-      containerNode: container,
-      questionNode: getQuestionNode(container)
+      containerNode,
+      questionNode,
+      optionAnchorNode: options[0]?.element || null
     }
   };
+}
+
+function findQuestionNodes() {
+  const selectors = "h1, h2, h3, h4, legend, p, .question, [data-question], [class*='question'], [id*='question']";
+  return Array.from(document.querySelectorAll(selectors)).filter((node) => {
+    if (!isVisible(node)) {
+      return false;
+    }
+    const text = getTextFromElement(node);
+    if (!isLikelyQuestionText(text)) {
+      return false;
+    }
+
+    // Avoid duplicated parent/child captures of identical question text.
+    const childQuestion = Array.from(node.children || []).some((child) =>
+      isLikelyQuestionText(getTextFromElement(child))
+    );
+    if (childQuestion) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function parseQuestionFromNode(questionNode, id) {
+  const questionText = getTextFromElement(questionNode);
+  let ancestor = questionNode.parentElement;
+  let depth = 0;
+
+  while (ancestor && depth < 8) {
+    const options = extractOptions(ancestor, questionText);
+    const record = buildQuestionRecord({
+      id,
+      questionText,
+      options,
+      containerNode: ancestor,
+      questionNode
+    });
+    if (record) {
+      return record;
+    }
+    ancestor = ancestor.parentElement;
+    depth += 1;
+  }
+
+  return null;
 }
 
 function scanAllQuestions() {
@@ -353,7 +543,32 @@ function scanAllQuestions() {
     .map((entry) => entry.container);
 
   const dedupe = new Set();
+  const usedNumbers = new Set();
   const results = [];
+  const MAX_RESULTS = 25;
+
+  const questionNodes = findQuestionNodes();
+  for (const questionNode of questionNodes) {
+    const parsed = parseQuestionFromNode(questionNode, results.length);
+    if (!parsed) {
+      continue;
+    }
+    const key = canonicalQuestionKey(parsed.questionText);
+    if (dedupe.has(key)) {
+      continue;
+    }
+    if (Number.isInteger(parsed.displayNumber) && usedNumbers.has(parsed.displayNumber)) {
+      continue;
+    }
+    dedupe.add(key);
+    if (Number.isInteger(parsed.displayNumber)) {
+      usedNumbers.add(parsed.displayNumber);
+    }
+    results.push(parsed);
+    if (results.length >= MAX_RESULTS) {
+      break;
+    }
+  }
 
   for (const container of rankedContainers) {
     const parsed = parseContainerToQuestion(container, results.length);
@@ -361,14 +576,20 @@ function scanAllQuestions() {
       continue;
     }
 
-    const key = parsed.questionText.toLowerCase();
+    const key = canonicalQuestionKey(parsed.questionText);
     if (dedupe.has(key)) {
+      continue;
+    }
+    if (Number.isInteger(parsed.displayNumber) && usedNumbers.has(parsed.displayNumber)) {
       continue;
     }
 
     dedupe.add(key);
+    if (Number.isInteger(parsed.displayNumber)) {
+      usedNumbers.add(parsed.displayNumber);
+    }
     results.push(parsed);
-    if (results.length >= 20) {
+    if (results.length >= MAX_RESULTS) {
       break;
     }
   }
@@ -377,12 +598,14 @@ function scanAllQuestions() {
     throw new Error("Could not find visible multiple-choice questions on this page.");
   }
 
+  results.sort((a, b) => (a.displayNumber || 9999) - (b.displayNumber || 9999));
   lastScans = results;
   showOverlay(`Detected ${results.length} question(s).`, "success");
 
   return {
     questions: results.map((item) => ({
       id: item.id,
+      displayNumber: item.displayNumber,
       questionText: item.questionText,
       options: item.options,
       pageTitle: item.pageTitle,
@@ -391,43 +614,48 @@ function scanAllQuestions() {
   };
 }
 
-function applySuggestionPanel(analysis, questionId) {
-  clearSuggestionPanel();
-
-  const target = lastScans.find((item) => item.id === questionId);
+function applySuggestionPanelForQuestion(answer) {
+  const target = lastScans.find((item) => item.id === answer.id);
   if (!target || !target.refs?.containerNode?.isConnected) {
-    throw new Error("Selected question is no longer visible. Re-scan questions.");
+    return;
   }
 
-  const answerText = normalizeWhitespace(analysis?.bestAnswerText || "");
+  const answerText = normalizeWhitespace(answer?.bestAnswerText || "");
   if (!answerText) {
-    throw new Error("No suggested answer text available.");
+    return;
   }
-
-  ensureStyles();
-
-  const confidence = Number.isFinite(analysis?.confidence)
-    ? Math.round(Math.max(0, Math.min(1, analysis.confidence)) * 100)
-    : 0;
-  const explanation = normalizeWhitespace(analysis?.explanation || "");
 
   const panel = document.createElement("div");
-  panel.id = PANEL_ID;
-  panel.innerHTML = `
-    <div class="qp-title">QuizPilot suggestion: ${answerText}</div>
-    <div>Confidence: ${confidence}%</div>
-    ${explanation ? `<div class="qp-sub">${explanation}</div>` : ""}
-  `;
+  panel.className = PANEL_CLASS;
+  panel.innerHTML = `<span class="qp-title">qp</span><span class="qp-answer">${answerText}</span>`;
+  panel.addEventListener("click", () => {
+    panel.classList.toggle("qp-open");
+  });
 
   if (target.refs.questionNode && target.refs.questionNode.parentElement) {
     target.refs.questionNode.insertAdjacentElement("afterend", panel);
+  } else if (target.refs.optionAnchorNode && target.refs.optionAnchorNode.parentElement) {
+    target.refs.optionAnchorNode.insertAdjacentElement("beforebegin", panel);
   } else {
     target.refs.containerNode.prepend(panel);
   }
 
-  suggestionPanelNode = panel;
-  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  showOverlay("Suggestion shown beside selected question.", "success");
+  suggestionPanelNodes.push(panel);
+}
+
+function applySuggestionPanelsForAll(answers) {
+  clearSuggestionPanel();
+  ensureStyles();
+
+  for (const answer of answers) {
+    applySuggestionPanelForQuestion(answer);
+  }
+
+  if (suggestionPanelNodes.length === 0) {
+    throw new Error("No answer panels could be displayed. Re-scan questions.");
+  }
+  suggestionPanelNodes[0].scrollIntoView({ block: "nearest", behavior: "smooth" });
+  showOverlay(`Displayed answers for ${suggestionPanelNodes.length} questions.`, "success");
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -438,21 +666,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: true, data });
         return;
       }
-      case "QUIZPILOT_SCAN": {
-        const data = scanAllQuestions();
-        sendResponse({ ok: true, data: data.questions[0] });
+      case "QUIZPILOT_SHOW_ALL_ANSWERS": {
+        const answers = Array.isArray(message?.payload?.answers)
+          ? message.payload.answers
+          : [];
+        if (answers.length === 0) {
+          throw new Error("No answers available to display.");
+        }
+        applySuggestionPanelsForAll(answers);
+        sendResponse({ ok: true, data: { shown: true } });
         return;
       }
-      case "QUIZPILOT_HIGHLIGHT": {
-        const analysis = message?.payload?.analysis;
-        const questionId = Number(message?.payload?.questionId);
-        if (!analysis || typeof analysis !== "object") {
-          throw new Error("Invalid analysis payload.");
+      case "QUIZPILOT_SHOW_PARTIAL_ANSWER": {
+        const answer = message?.payload?.answer;
+        if (!answer || typeof answer !== "object") {
+          throw new Error("No partial answer provided.");
         }
-        if (!Number.isInteger(questionId)) {
-          throw new Error("Invalid selected question.");
+        applySuggestionPanelForQuestion(answer);
+        showOverlay("Answer added.", "success");
+        sendResponse({ ok: true, data: { shown: true } });
+        return;
+      }
+      case "QUIZPILOT_PROGRESS": {
+        const solved = Number(message?.payload?.solved || 0);
+        const total = Number(message?.payload?.total || 0);
+        if (total > 0) {
+          showOverlay(`Solved ${solved}/${total}...`);
         }
-        applySuggestionPanel(analysis, questionId);
         sendResponse({ ok: true, data: { shown: true } });
         return;
       }
@@ -470,3 +710,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: false, error: error.message || "Unexpected content script error." });
   }
 });
+
+ensureLauncher();

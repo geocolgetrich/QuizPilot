@@ -56,11 +56,6 @@ body {
   cursor: pointer;
 }
 
-select.btn {
-  width: 100%;
-  margin-top: 6px;
-}
-
 .btn:hover {
   border-color: #9fb4cc;
 }
@@ -90,8 +85,7 @@ select.btn {
   color: var(--muted);
 }
 
-.status-card,
-.result-card {
+.status-card {
   margin-top: 12px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -112,25 +106,6 @@ select.btn {
 .status-card.success {
   border-color: #86efac;
   background: var(--ok-bg);
-}
-
-.result-card h2 {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
-
-.result-card p {
-  margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.warning {
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-weight: 600;
 }
 
 .footer {

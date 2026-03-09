@@ -1,22 +1,23 @@
+
 {
-  "name": "quizpilot-server",
+  "name": "quizpilot-backend",
   "version": "1.0.0",
-  "description": "Secure backend for QuizPilot Chrome extension",
-  "main": "src/server.js",
-  "type": "commonjs",
+  "description": "Backend server for the QuizPilot Chrome extension",
+  "main": "server.js",
+  "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=18"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "express-rate-limit": "^7.5.0",
-    "helmet": "^8.1.0",
-    "morgan": "^1.10.0"
+    "express": "^4.19.2",
+    "firebase-admin": "^12.5.0"
   }
 }
+

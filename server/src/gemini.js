@@ -108,7 +108,6 @@ function clampConfidence(value) {
 function normalizeModelOutput(parsed, options) {
   let bestAnswerIndex = Number.isInteger(parsed?.bestAnswerIndex) ? parsed.bestAnswerIndex : -1;
   const bestAnswerTextRaw = sanitizeText(parsed?.bestAnswerText || "");
-  const explanation = sanitizeText(parsed?.explanation || "") || "No explanation provided by model.";
   let confidence = clampConfidence(Number(parsed?.confidence));
 
   if (bestAnswerIndex < 0 || bestAnswerIndex >= options.length) {
@@ -132,7 +131,6 @@ function normalizeModelOutput(parsed, options) {
   return {
     bestAnswerIndex,
     bestAnswerText,
-    explanation,
     confidence
   };
 }
@@ -148,13 +146,11 @@ Return ONLY strict JSON with this exact schema:
 {
   "bestAnswerIndex": number,
   "bestAnswerText": string,
-  "explanation": string,
   "confidence": number
 }
 
 Rules:
 - bestAnswerIndex must be the zero-based index from the provided options.
-- explanation must be concise (max 3 sentences).
 - confidence must be between 0 and 1.
 - No markdown, no code fences, no extra keys.
 

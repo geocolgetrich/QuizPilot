@@ -7,12 +7,14 @@
     "default_popup": "popup.html",
     "default_title": "QuizPilot"
   },
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "identity"],
+  "oauth2": {
+    "client_id": "339969542787-pcf3ee8flfc6pmufc92jvc1j4c7jtfn8.apps.googleusercontent.com",
+    "scopes": ["openid", "email", "profile"]
+  },
   "host_permissions": [
     "http://localhost:10000/*",
-    "https://*.onrender.com/*",
-    "http://*/*",
-    "https://*/*"
+    "https://*.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"

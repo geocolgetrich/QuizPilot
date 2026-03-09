@@ -13,18 +13,22 @@
       <p>Study-only MCQ assistant</p>
     </header>
 
+    <section class="status-card">
+      <p><strong>Account:</strong> <span id="authStatus">Not signed in</span></p>
+      <p><strong>Credits:</strong> <span id="creditsText">-</span></p>
+      <div class="actions">
+        <button id="signInBtn" class="btn btn-primary">Sign in with Google</button>
+        <button id="signOutBtn" class="btn">Sign out</button>
+      </div>
+    </section>
+
     <section class="actions">
       <button id="scanBtn" class="btn btn-primary">Scan All Questions</button>
-      <button id="highlightBtn" class="btn">Get AI Answer</button>
-      <button id="explainBtn" class="btn">Explain Answer</button>
+      <button id="highlightBtn" class="btn">Get AI Answers (All)</button>
     </section>
 
     <section class="status-card">
       <p><strong>Detected questions:</strong> <span id="questionCount">0</span></p>
-      <label for="questionSelect"><strong>Select question</strong></label>
-      <select id="questionSelect" class="btn" disabled>
-        <option value="">Scan questions first</option>
-      </select>
     </section>
 
     <label class="toggle-row" for="autoHighlightToggle">
@@ -34,15 +38,6 @@
 
     <section class="status-card" id="statusCard" aria-live="polite">
       <p id="statusText">Ready.</p>
-    </section>
-
-    <section class="result-card" id="resultCard" hidden>
-      <h2>Suggestion</h2>
-      <p><strong>Best answer:</strong> <span id="bestAnswerText">-</span></p>
-      <p><strong>Confidence:</strong> <span id="confidenceText">-</span></p>
-      <p id="lowConfidenceNote" class="warning" hidden>Low confidence: verify manually.</p>
-      <p><strong>Why:</strong></p>
-      <p id="explanationText">-</p>
     </section>
 
     <footer class="footer">

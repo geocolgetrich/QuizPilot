@@ -9,14 +9,28 @@ Important scope boundary:
 ## Architecture
 
 - `chrome-extension/`
-  - `popup.html`, `popup.css`, `popup.js`: user controls and explanation UI.
-  - `background.js`: orchestrates popup/content/backend communication and retry logic.
+  - `popup.html`, `popup.css`, `popup.js`: user controls, Google sign-in, quota display.
+  - `background.js`: orchestrates popup/content/backend communication, auth token storage, retry logic.
   - `content.js`: DOM scanning heuristics + on-page highlighting + floating status overlay.
   - `config.js`: extension-side runtime defaults (backend URL and request timeouts).
 - `server/`
-  - `src/server.js`: Express API with input validation, CORS, rate limiting, and error handling.
+  - `src/server.js`: Express API with Firebase-auth endpoints, quota logic, CORS, rate limiting, and error handling.
+  - `src/firebase-admin.js`: Firebase Admin initialization from environment variables.
   - `src/gemini.js`: Gemini prompt + response parsing/normalization.
   - `src/validation.js`: request sanitization/validation helpers.
+
+## Firebase Auth + Credits
+
+- Auth is Google-only, via Chrome Identity + Firebase Identity Toolkit exchange on backend.
+- Backend verifies Firebase ID tokens with Firebase Admin.
+- Firestore stores per-user credits in `users/{uid}`.
+- New users get starter credits (`STARTER_CREDITS`, default `100`).
+- Each successful `/analyze-question` consumes 1 credit.
+
+Security notes:
+- Firebase **web** config/apiKey is not a secret.
+- Firebase **Admin** credentials are secrets and must stay on backend env vars only.
+- Firestore should not remain in test mode for production; use authenticated, least-privilege rules.
 
 Data flow:
 1. User clicks **Scan All Questions** in popup.
@@ -70,6 +84,8 @@ cp .env.example .env
 
 4. Edit `.env`:
 - `GEMINI_API_KEY=...`
+- `FIREBASE_WEB_API_KEY=...`
+- Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, or `FIREBASE_SERVICE_ACCOUNT_JSON`)
 - Optional strict mode:
   - `CORS_STRICT_MODE=true`
   - `ALLOWED_ORIGINS=chrome-extension://<your_extension_id>` (after loading extension once)
@@ -100,6 +116,9 @@ curl http://localhost:10000/health
 4. In Render service settings, add environment variables:
 - `GEMINI_API_KEY` = your real Gemini API key
 - `GEMINI_MODEL` = `gemini-2.0-flash` (or another compatible model)
+- `FIREBASE_WEB_API_KEY` = your Firebase Web API key
+- Firebase Admin secret vars (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, or `FIREBASE_SERVICE_ACCOUNT_JSON`)
+- `STARTER_CREDITS` = `100`
 - `CORS_STRICT_MODE` = `false` (recommended while stabilizing integration)
 - `ALLOWED_ORIGINS` = `chrome-extension://<your_extension_id>` (required only when strict mode is true)
 - `RATE_LIMIT_MAX` = `60` (or preferred limit)
@@ -121,6 +140,7 @@ For Render deployment:
 3. Click **Load unpacked**.
 4. Select the `chrome-extension/` folder.
 5. Pin QuizPilot in toolbar.
+6. Update `chrome-extension/manifest.json` `oauth2.client_id` with your Google OAuth client ID before sign-in will work.
 
 ## Permissions Used
 
