@@ -225,7 +225,63 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "quizpilot-server",
+    firebaseReady,
+    model: geminiModel,
+    starterCredits,
+    corsStrictMode,
+    allowedOrigins,
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.post("/auth/google", async (req, res, next) => {
+  try {
+    if (!firebaseReady) {
+      throw new Error("Firebase Admin is not configured on server.");
+    }
+
+    const googleAccessToken = sanitizeText(req.body?.googleAccessToken);
+    if (!googleAccessToken) {
+      const err = new Error("googleAccessToken is required.");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const exchange = await exchangeGoogleAccessToken(googleAccessToken);
+    const firebaseIdToken = sanitizeText(exchange.idToken);
+    if (!firebaseIdToken) {
+      throw new Error("Firebase exchange did not return idToken.");
+    }
+
+    const decoded = await getAuth().verifyIdToken(firebaseIdToken);
+    const profile = {
+      email: sanitizeText(exchange.email || decoded.email),
+      name: sanitizeText(exchange.displayName || decoded.name),
+      picture: sanitizeText(exchange.photoUrl || decoded.picture)
+    };
+    const userDoc = await ensureUserDoc(decoded.uid, profile);
+
+    res.json({
+      idToken: firebaseIdToken,
+      user: {
+        uid: decoded.uid,
+        email: profile.email,
+        name: profile.name,
+        picture: profile.picture,
+        creditsRemaining: Number(userDoc?.creditsRemaining || 0),
+        totalUsed: Number(userDoc?.totalUsed || 0)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/google", async (req, res, next) => {
   try {
     if (!firebaseReady) {
       throw new Error("Firebase Admin is not configured on server.");
@@ -286,7 +342,56 @@ app.get("/auth/me", verifyFirebaseUser, async (req, res, next) => {
   }
 });
 
+app.get("/api/auth/me", verifyFirebaseUser, async (req, res, next) => {
+  try {
+    const userDoc = await ensureUserDoc(req.user.uid, req.user);
+    res.json({
+      user: {
+        uid: req.user.uid,
+        email: req.user.email,
+        name: req.user.name,
+        picture: req.user.picture,
+        creditsRemaining: Number(userDoc?.creditsRemaining || 0),
+        totalUsed: Number(userDoc?.totalUsed || 0)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/analyze-question", verifyFirebaseUser, async (req, res, next) => {
+  let charged = false;
+  try {
+    if (!geminiApiKey) {
+      throw new Error("Server is missing GEMINI_API_KEY.");
+    }
+
+    const payload = validateAnalyzeRequest(req.body);
+    const creditsRemaining = await consumeOneCredit(req.user.uid);
+    charged = true;
+
+    const result = await callGemini({
+      ...payload,
+      apiKey: geminiApiKey,
+      model: geminiModel
+    });
+
+    res.json({
+      ...result,
+      usage: {
+        creditsRemaining
+      }
+    });
+  } catch (error) {
+    if (charged) {
+      await refundOneCredit(req.user.uid).catch(() => {});
+    }
+    next(error);
+  }
+});
+
+app.post("/api/analyze-question", verifyFirebaseUser, async (req, res, next) => {
   let charged = false;
   try {
     if (!geminiApiKey) {
