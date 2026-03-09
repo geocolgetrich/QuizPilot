@@ -1,48 +1,13 @@
 # QuizPilot
 
-QuizPilot is a Chrome Extension (Manifest V3) plus a secure Node.js backend that analyzes visible multiple-choice quiz questions for study and revision workflows.
+QuizPilot is a Chrome extension (Manifest V3) plus a secure Node.js backend for study-only multiple-choice quiz practice.
 
-Important scope boundary:
-- Use only in user-authorized study/practice environments.
-- No login bypass, anti-bot bypass, paywall bypass, proctoring bypass, captcha solving, stealth automation, or auto-submission.
+Scope limits:
+- Only analyze content already visible to the user.
+- No bypassing logins, paywalls, captchas, proctoring, or access controls.
+- No auto-submit behavior.
 
-## Architecture
-
-- `chrome-extension/`
-  - `popup.html`, `popup.css`, `popup.js`: user controls, Google sign-in, quota display.
-  - `background.js`: orchestrates popup/content/backend communication, auth token storage, retry logic.
-  - `content.js`: DOM scanning heuristics + on-page highlighting + floating status overlay.
-  - `config.js`: extension-side runtime defaults (backend URL and request timeouts).
-- `server/`
-  - `src/server.js`: Express API with Firebase-auth endpoints, quota logic, CORS, rate limiting, and error handling.
-  - `src/firebase-admin.js`: Firebase Admin initialization from environment variables.
-  - `src/gemini.js`: Gemini prompt + response parsing/normalization.
-  - `src/validation.js`: request sanitization/validation helpers.
-
-## Firebase Auth + Credits
-
-- Auth is Google-only, via Chrome Identity + Firebase Identity Toolkit exchange on backend.
-- Backend verifies Firebase ID tokens with Firebase Admin.
-- Firestore stores per-user credits in `users/{uid}`.
-- New users get starter credits (`STARTER_CREDITS`, default `100`).
-- Each successful `/analyze-question` consumes 1 credit.
-
-Security notes:
-- Firebase **web** config/apiKey is not a secret.
-- Firebase **Admin** credentials are secrets and must stay on backend env vars only.
-- Firestore should not remain in test mode for production; use authenticated, least-privilege rules.
-
-Data flow:
-1. User clicks **Scan All Questions** in popup.
-2. Popup asks background service worker to scan the active tab.
-3. Background asks content script to extract all visible question/option blocks from the DOM.
-4. User selects one detected question from the popup dropdown and clicks **Get AI Answer**.
-5. Background sends selected question data to backend `POST /analyze-question`.
-6. Backend calls Gemini with strict JSON instructions and resilient parsing.
-7. Parsed response is returned to extension.
-8. Extension shows answer/explanation in popup and can display a suggestion panel beside the selected question.
-
-## Folder Structure
+## Project Structure
 
 ```text
 QuizPilot/
@@ -54,162 +19,117 @@ QuizPilot/
     popup.html
     popup.css
     popup.js
-    icons/
-      README.md
   server/
     package.json
     .env.example
-    .gitignore
     src/
       server.js
       gemini.js
+      firebase-admin.js
       validation.js
-  README.md
 ```
 
-## Run Backend Locally
+## Architecture
 
-1. Open terminal at `server/`.
-2. Install dependencies:
+- Popup (`popup.*`): sign-in, scan trigger, solve trigger, status.
+- Background (`background.js`): orchestrates tab messaging, auth exchange, backend calls, progress events.
+- Content script (`content.js`): scans visible MCQ blocks, dedupes numbered questions, places discreet `qp` chips beside questions.
+- Backend (`server/src/server.js`): Firebase auth, credits, Gemini calls, validation, CORS, rate limiting.
 
-```bash
-npm install
-```
+## Auth + Credits
 
-3. Create `.env` from `.env.example` and set your Gemini key:
+- Sign-in is Google-only through `chrome.identity`.
+- Backend exchanges Google access token at Firebase Identity Toolkit.
+- Backend verifies Firebase ID token with Firebase Admin SDK.
+- Firestore stores user usage at `users/{uid}`.
+- `STARTER_CREDITS` controls initial free answers (default `100`).
+- Each `/analyze-question` call consumes 1 credit.
 
-```bash
-cp .env.example .env
-```
+## Backend Local Setup
 
-4. Edit `.env`:
-- `GEMINI_API_KEY=...`
-- `FIREBASE_WEB_API_KEY=...`
-- Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, or `FIREBASE_SERVICE_ACCOUNT_JSON`)
-- Optional strict mode:
-  - `CORS_STRICT_MODE=true`
-  - `ALLOWED_ORIGINS=chrome-extension://<your_extension_id>` (after loading extension once)
+1. Open terminal in `server/`.
+2. Install:
+   ```bash
+   npm install
+   ```
+3. Create env file:
+   ```bash
+   cp .env.example .env
+   ```
+4. Fill required variables:
+   - `GEMINI_API_KEY`
+   - `FIREBASE_WEB_API_KEY`
+   - Firebase Admin credentials:
+     - Either `FIREBASE_SERVICE_ACCOUNT_JSON`
+     - Or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
+5. Start:
+   ```bash
+   npm run dev
+   ```
+6. Test:
+   - `GET http://localhost:10000/`
+   - `GET http://localhost:10000/health`
 
-5. Start server:
+## Render Deployment
 
-```bash
-npm run dev
-```
+Create a Render Web Service from this repo:
 
-6. Verify health:
-
-```bash
-curl http://localhost:10000/health
-```
-
-## Deploy Backend to Render
-
-1. Push this repository to GitHub.
-2. In Render, create a new **Web Service** from the repo.
-3. Configure:
-- Runtime: `Node`
 - Root directory: `server`
 - Build command: `npm install`
 - Start command: `npm start`
-- Node version: `>=18`
 
-4. In Render service settings, add environment variables:
-- `GEMINI_API_KEY` = your real Gemini API key
-- `GEMINI_MODEL` = `gemini-2.0-flash` (or another compatible model)
-- `FIREBASE_WEB_API_KEY` = your Firebase Web API key
-- Firebase Admin secret vars (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, or `FIREBASE_SERVICE_ACCOUNT_JSON`)
-- `STARTER_CREDITS` = `100`
-- `CORS_STRICT_MODE` = `false` (recommended while stabilizing integration)
-- `ALLOWED_ORIGINS` = `chrome-extension://<your_extension_id>` (required only when strict mode is true)
-- `RATE_LIMIT_MAX` = `60` (or preferred limit)
+Set these Render environment variables:
 
-5. Deploy. Note your Render URL (for example `https://quizpilot-api.onrender.com`).
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL` (example: `gemini-2.0-flash`)
+- `FIREBASE_WEB_API_KEY`
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_CLIENT_EMAIL`
+- `FIREBASE_PRIVATE_KEY`
+- `STARTER_CREDITS` (example: `100`)
+- `RATE_LIMIT_MAX` (example: `60`)
+- `CORS_STRICT_MODE` (`false` while testing; `true` in stricter setup)
+- `ALLOWED_ORIGINS` (required when strict mode is true): `chrome-extension://<extension_id>`
 
-## Point Extension to Backend
+Important:
+- Do not set `FIRBASE_PROJECT_ID` (typo). Use `FIREBASE_PROJECT_ID`.
 
-For local dev, default backend is already `http://localhost:10000` in `chrome-extension/config.js`.
+## Extension Setup
 
-For Render deployment:
-1. Update `chrome-extension/config.js` `BACKEND_URL` to your Render URL.
-2. Reload the extension in `chrome://extensions`.
+1. In `chrome-extension/config.js`, set:
+   - `BACKEND_URL` to your Render URL (no trailing endpoint path).
+2. In `chrome-extension/manifest.json`, set `oauth2.client_id` to your Google OAuth Client ID.
+3. Open `chrome://extensions`.
+4. Enable Developer mode.
+5. Load unpacked `chrome-extension/`.
+6. Open extension popup and sign in.
 
-## Load Extension in Chrome (Unpacked)
+## Backend Routes
 
-1. Open `chrome://extensions/`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the `chrome-extension/` folder.
-5. Pin QuizPilot in toolbar.
-6. Update `chrome-extension/manifest.json` `oauth2.client_id` with your Google OAuth client ID before sign-in will work.
+Both plain and `/api` prefixed routes are supported:
 
-## Permissions Used
-
-In `manifest.json`:
-- `activeTab`: interact with currently active tab when user triggers actions.
-- `tabs`: query active tab from background.
-- `storage`: store auto-highlight and backend URL settings.
-- `scripting`: reserved for future dynamic script actions.
-- `host_permissions`:
-  - quiz page domains (`http/https`) so content scripts can run on visible quiz pages.
-  - backend domains (`localhost` and Render) for API requests.
-
-## API Contract
-
-`POST /analyze-question`
-
-Request body:
-
-```json
-{
-  "questionText": "What is ...?",
-  "options": ["Option A", "Option B", "Option C"],
-  "context": {
-    "pageTitle": "Practice Quiz",
-    "hostname": "example.com"
-  }
-}
-```
-
-Response body:
-
-```json
-{
-  "bestAnswerIndex": 1,
-  "bestAnswerText": "Option B",
-  "explanation": "...",
-  "confidence": 0.82
-}
-```
+- `GET /health` and `GET /api/health`
+- `POST /auth/google` and `POST /api/auth/google`
+- `GET /auth/me` and `GET /api/auth/me`
+- `POST /analyze-question` and `POST /api/analyze-question`
 
 ## Troubleshooting
 
-1. `Could not find a visible quiz block`
-- Scroll so the question and options are fully visible.
-- Ensure page is not inside a cross-origin iframe (extension cannot access restricted frame content).
-- Try rescanning after expanding collapsed sections.
+- `Backend returned 404`:
+  - Confirm Render service root directory is `server`.
+  - Confirm `npm start` runs `node src/server.js`.
+  - Open `https://<service>.onrender.com/health`.
 
-2. `No analyzed question yet`
-- Click **Scan All Questions**, select one question, then click **Get AI Answer**.
+- `Google OAuth client_id is not configured`:
+  - Fill `manifest.json > oauth2.client_id` and reload extension.
 
-3. `Backend request timed out`
-- Confirm server is running and reachable.
-- Check backend URL in `chrome-extension/config.js`.
-- Check Render service status/logs.
+- `Failed to reach backend`:
+  - Check `chrome-extension/config.js` `BACKEND_URL`.
+  - Check Render logs and service is deployed.
 
-4. `Server is missing GEMINI_API_KEY`
-- Set `GEMINI_API_KEY` in `server/.env` (local) or Render environment settings.
+- `No credits remaining`:
+  - Increase credits in Firestore user doc or raise `STARTER_CREDITS` for new users.
 
-5. CORS errors
-- Keep `CORS_STRICT_MODE=false` while testing.
-- If strict mode is enabled, ensure `ALLOWED_ORIGINS` includes exact extension origin:
-  - `chrome-extension://<extension_id>`
+- Too many detected questions:
+  - Current scanner prioritizes numbered visible MCQ questions and caps scan/analyze limits from `config.js`.
 
-6. Gemini JSON parsing errors
-- Backend already enforces strict parsing and fallback normalization.
-- Inspect Render logs for upstream model output anomalies.
-
-## Extension Safety Notes
-
-- QuizPilot only reads currently visible page content and only when user clicks popup actions.
-- It does not auto-submit, auto-navigate, solve captchas, bypass auth, or hide behavior.
-- It is intended for study/revision support in authorized contexts.

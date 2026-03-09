@@ -116,7 +116,15 @@ scanBtn.addEventListener("click", async () => {
   try {
     const data = await sendRuntimeMessage("QUIZPILOT_SCAN_ALL_QUESTIONS");
     renderQuestionList(data.scannedQuestions);
-    setStatus(`Detected ${data.scannedQuestions.length} quiz question(s).`, "success");
+    const detectedCount = Number(data?.scannedQuestions?.length || 0);
+    setStatus(`Detected ${detectedCount} quiz question(s).`, "success");
+
+    if (autoHighlightToggle.checked && detectedCount > 0) {
+      setStatus("Auto-show is enabled. Getting AI answers...");
+      const solveData = await sendRuntimeMessage("QUIZPILOT_ANALYZE_ALL_QUESTIONS");
+      setStatus(`Placed discreet answers on page for ${solveData.answers.length} question(s).`, "success");
+      await refreshState();
+    }
   } catch (error) {
     setStatus(error.message || "Failed to scan questions.", "error");
   } finally {

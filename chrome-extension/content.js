@@ -172,18 +172,19 @@ function uniqueByText(optionEntries) {
   const seen = new Set();
   const result = [];
   for (const entry of optionEntries) {
-    const key = entry.text.toLowerCase();
+    const text = normalizeWhitespace(String(entry?.text || ""));
+    const key = text.toLowerCase();
     if (!key || seen.has(key)) {
       continue;
     }
     seen.add(key);
-    result.push(entry);
+    result.push({ ...entry, text });
   }
   return result;
 }
 
 function getVisibleContainers() {
-  const selectors = "main, form, section, article, [role='main'], [role='dialog'], div";
+  const selectors = "main, form, section, article, [role='main'], [role='dialog'], .question, [class*='question'], [class*='quiz'], [id*='question']";
   return Array.from(document.querySelectorAll(selectors)).filter((element) => {
     if (!isVisible(element)) {
       return false;
@@ -197,7 +198,7 @@ function getVisibleContainers() {
     const optionsCount = element.querySelectorAll(
       "input[type='radio'], input[type='checkbox'], [role='radio'], [role='option'], label, li, button, .option, .answer, .choice"
     ).length;
-    return optionsCount >= 1 || text.includes("?");
+    return optionsCount >= 2 || text.includes("?");
   });
 }
 
@@ -224,7 +225,7 @@ function scoreContainer(container) {
 }
 
 function extractQuestionNumber(questionText) {
-  const match = String(questionText || "").match(/^\s*(\d+)\s*[\).:-]\s+/);
+  const match = String(questionText || "").match(/^\s*(\d{1,3})\s*[\).:-]?\s+/);
   if (!match) {
     return null;
   }
@@ -509,6 +510,19 @@ function findQuestionNodes() {
   });
 }
 
+function findNumberedQuestionNodes() {
+  const allVisible = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6, legend, p, div, span, li"))
+    .filter((node) => isVisible(node) && (node.childElementCount === 0 || node.childElementCount <= 2));
+
+  return allVisible.filter((node) => {
+    const text = getTextFromElement(node);
+    if (!isLikelyQuestionText(text)) {
+      return false;
+    }
+    return Number.isInteger(extractQuestionNumber(text));
+  });
+}
+
 function parseQuestionFromNode(questionNode, id) {
   const questionText = getTextFromElement(questionNode);
   let ancestor = questionNode.parentElement;
@@ -547,7 +561,7 @@ function scanAllQuestions() {
   const results = [];
   const MAX_RESULTS = 25;
 
-  const questionNodes = findQuestionNodes();
+  const questionNodes = [...findNumberedQuestionNodes(), ...findQuestionNodes()];
   for (const questionNode of questionNodes) {
     const parsed = parseQuestionFromNode(questionNode, results.length);
     if (!parsed) {
@@ -598,12 +612,29 @@ function scanAllQuestions() {
     throw new Error("Could not find visible multiple-choice questions on this page.");
   }
 
-  results.sort((a, b) => (a.displayNumber || 9999) - (b.displayNumber || 9999));
-  lastScans = results;
-  showOverlay(`Detected ${results.length} question(s).`, "success");
+  const bestByQuestion = new Map();
+  for (const item of results) {
+    const key = Number.isInteger(item.displayNumber)
+      ? `n:${item.displayNumber}`
+      : `t:${canonicalQuestionKey(item.questionText)}`;
+    const score = item.options.length;
+    const existing = bestByQuestion.get(key);
+    if (!existing || score > existing.score) {
+      bestByQuestion.set(key, { item, score });
+    }
+  }
+
+  const dedupedResults = Array.from(bestByQuestion.values()).map((entry) => entry.item);
+  dedupedResults.sort((a, b) => (a.displayNumber || 9999) - (b.displayNumber || 9999));
+  const cappedResults = dedupedResults.slice(0, 25);
+  if (cappedResults.length === 0) {
+    throw new Error("Could not find visible multiple-choice questions on this page.");
+  }
+  lastScans = cappedResults;
+  showOverlay(`Detected ${cappedResults.length} question(s).`, "success");
 
   return {
-    questions: results.map((item) => ({
+    questions: cappedResults.map((item) => ({
       id: item.id,
       displayNumber: item.displayNumber,
       questionText: item.questionText,
